@@ -9,6 +9,9 @@
 .env
 .env.local
 
+# OAuth token storage (stored in ~/.clickup-claude/)
+.clickup-claude/
+
 # Go test files
 *.test
 *.out

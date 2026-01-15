@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/GuerrillaMarketingKY/clickup-claude-integration/internal/auth"
 )
 
 const (
@@ -14,8 +16,9 @@ const (
 )
 
 type Client struct {
-	apiToken   string
-	httpClient *http.Client
+	accessToken string
+	storage     *auth.TokenStorage
+	httpClient  *http.Client
 }
 
 type Task struct {
@@ -64,13 +67,30 @@ type TaskComment struct {
 	CommentText string `json:"comment_text"`
 }
 
-func NewClient(apiToken string) *Client {
+// NewClient creates a client with an access token (for OAuth)
+func NewClient(accessToken string) *Client {
 	return &Client{
-		apiToken: apiToken,
+		accessToken: accessToken,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 	}
+}
+
+// NewClientFromStorage creates a client using stored OAuth token
+func NewClientFromStorage(storage *auth.TokenStorage) (*Client, error) {
+	token, err := storage.GetToken()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load token: %w", err)
+	}
+
+	return &Client{
+		accessToken: token.AccessToken,
+		storage:     storage,
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+	}, nil
 }
 
 func (c *Client) GetTask(taskID string) (*Task, error) {
@@ -81,7 +101,7 @@ func (c *Client) GetTask(taskID string) (*Task, error) {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("Authorization", c.apiToken)
+	req.Header.Set("Authorization", c.accessToken)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
@@ -117,7 +137,7 @@ func (c *Client) UpdateTaskStatus(taskID, status string) error {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("Authorization", c.apiToken)
+	req.Header.Set("Authorization", c.accessToken)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
@@ -148,7 +168,7 @@ func (c *Client) AddComment(taskID string, comment string) error {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("Authorization", c.apiToken)
+	req.Header.Set("Authorization", c.accessToken)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)

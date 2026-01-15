@@ -110,37 +110,42 @@ git clone https://github.com/GuerrillaMarketingKY/Claude-Code---1.15.26.git
 cd Claude-Code---1.15.26
 ```
 
-2. **Get your ClickUp API token**
+2. **Create a ClickUp OAuth App**
 
-   - Go to ClickUp Settings → Apps
-   - Click "Generate" under API Token
-   - Copy the token (starts with `pk_`)
+   - Go to ClickUp Settings → Apps: https://app.clickup.com/settings/apps
+   - Click "Create an App"
+   - Set **Redirect URL** to: `http://localhost:8089/callback`
+   - Copy your **Client ID** and **Client Secret**
 
-3. **Find your ClickUp Team ID**
+   See `OAUTH_SETUP.md` for detailed instructions.
 
-   - Go to: https://api.clickup.com/api/v2/team
-   - Use your API token in the header
-   - Or use this tool: `clickup-claude teams` (coming soon)
-
-4. **Configure environment variables**
+3. **Configure OAuth credentials**
 
 ```bash
 cp .env.example .env
-# Edit .env and add your credentials
+# Edit .env and add your OAuth credentials
 ```
 
 Or export them directly:
 
 ```bash
-export CLICKUP_API_TOKEN='pk_your_token_here'
-export CLICKUP_TEAM_ID='your_team_id_here'
+export CLICKUP_CLIENT_ID='your_client_id'
+export CLICKUP_CLIENT_SECRET='your_client_secret'
 ```
 
-5. **Build the tool**
+4. **Build the tool**
 
 ```bash
 go build -o clickup-claude ./cmd/clickup-claude
 ```
+
+5. **Authenticate with ClickUp**
+
+```bash
+./clickup-claude auth
+```
+
+This opens your browser to authorize the app. Once authorized, your token is securely stored.
 
 ---
 
@@ -230,12 +235,14 @@ This is a **demonstration** to show the potential of autonomous Claude Code inte
 
 ### ✅ What Works Now
 
+- ✅ **Full OAuth 2.0 authentication** with encrypted token storage
 - ✅ Fetches tasks from ClickUp API
 - ✅ Parses task requirements intelligently
 - ✅ Identifies task types (bug/feature/refactor)
 - ✅ Simulates autonomous execution workflow
 - ✅ Updates ClickUp tasks with status
 - ✅ Creates structured execution plans
+- ✅ Secure token management with automatic expiration handling
 
 ### 🚧 What's Simulated (Not Yet Implemented)
 
@@ -279,6 +286,9 @@ To make this **fully autonomous**, we need to:
 │   └── clickup-claude/       # Main application entry point
 │       └── main.go
 ├── internal/
+│   ├── auth/                 # OAuth 2.0 authentication
+│   │   ├── oauth.go          # OAuth flow handler
+│   │   └── storage.go        # Encrypted token storage
 │   ├── clickup/              # ClickUp API client
 │   │   └── client.go
 │   ├── parser/               # Task requirement parser
@@ -294,7 +304,9 @@ To make this **fully autonomous**, we need to:
 │   └── settings.json
 ├── go.mod
 ├── .env.example
-└── README.md
+├── README.md
+├── OAUTH_SETUP.md            # OAuth setup guide
+└── DEMO.md
 ```
 
 ---

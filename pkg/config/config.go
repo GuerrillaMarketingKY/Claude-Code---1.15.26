@@ -6,21 +6,24 @@ import (
 )
 
 type Config struct {
-	ClickUpAPIToken string
-	ClickUpTeamID   string
+	// OAuth Configuration
+	OAuthClientID     string
+	OAuthClientSecret string
+
+	// Repository configuration
 	GitHubRepo      string
 }
 
 // Load reads configuration from environment variables
 func Load() (*Config, error) {
-	apiToken := os.Getenv("CLICKUP_API_TOKEN")
-	if apiToken == "" {
-		return nil, fmt.Errorf("CLICKUP_API_TOKEN environment variable is required")
+	clientID := os.Getenv("CLICKUP_CLIENT_ID")
+	if clientID == "" {
+		return nil, fmt.Errorf("CLICKUP_CLIENT_ID environment variable is required")
 	}
 
-	teamID := os.Getenv("CLICKUP_TEAM_ID")
-	if teamID == "" {
-		return nil, fmt.Errorf("CLICKUP_TEAM_ID environment variable is required")
+	clientSecret := os.Getenv("CLICKUP_CLIENT_SECRET")
+	if clientSecret == "" {
+		return nil, fmt.Errorf("CLICKUP_CLIENT_SECRET environment variable is required")
 	}
 
 	githubRepo := os.Getenv("GITHUB_REPO")
@@ -29,8 +32,8 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		ClickUpAPIToken: apiToken,
-		ClickUpTeamID:   teamID,
-		GitHubRepo:      githubRepo,
+		OAuthClientID:     clientID,
+		OAuthClientSecret: clientSecret,
+		GitHubRepo:        githubRepo,
 	}, nil
 }
