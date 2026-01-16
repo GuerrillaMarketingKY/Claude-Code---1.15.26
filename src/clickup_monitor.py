@@ -1,12 +1,11 @@
 """
-ClickUp Task Monitor - Autonomous monitoring for deadlines and stale tasks
-Monitors all tasks in workspace and sends reminders for:
+ClickUp Task Monitor - Simple on-demand task checker
+Checks all tasks in workspace for:
 - Approaching deadlines (within 2 days)
-- Tasks with no updates in 24+ hours
+- Stale tasks (no updates in 7+ days)
 """
 
 import os
-import time
 import requests
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
@@ -20,9 +19,8 @@ WORKSPACE_ID = os.getenv('WORKSPACE_ID')
 BASE_URL = 'https://api.clickup.com/api/v2'
 
 # Configuration
-CHECK_INTERVAL_MINUTES = 60  # How often to check tasks
 DEADLINE_WARNING_DAYS = 2    # Warn when deadline is within this many days
-STALE_TASK_HOURS = 24       # Consider task stale after this many hours
+STALE_TASK_DAYS = 7          # Consider task stale after this many days
 
 class ClickUpMonitor:
     def __init__(self, api_token: str, workspace_id: str):
@@ -154,14 +152,14 @@ class ClickUpMonitor:
         # Convert milliseconds timestamp to datetime
         last_updated = datetime.fromtimestamp(int(date_updated_str) / 1000)
         now = datetime.now()
-        hours_since_update = (now - last_updated).total_seconds() / 3600
+        days_since_update = (now - last_updated).days
 
-        # Check if task is stale
-        if hours_since_update >= STALE_TASK_HOURS:
+        # Check if task is stale (using DAYS now, not hours)
+        if days_since_update >= STALE_TASK_DAYS:
             return {
                 'type': 'stale',
                 'task': task,
-                'hours_since_update': hours_since_update,
+                'days_since_update': days_since_update,
                 'last_updated': last_updated
             }
 
@@ -240,7 +238,7 @@ Please update the status or adjust the deadline if needed."""
         task = alert['task']
         task_id = task['id']
         task_name = task['name']
-        hours_since_update = alert['hours_since_update']
+        days_since_update = alert['days_since_update']
         last_updated = alert['last_updated']
 
         # Create unique key for this reminder (once per day)
@@ -252,8 +250,6 @@ Please update the status or adjust the deadline if needed."""
 
         assignees = task.get('assignees', [])
         mentions = self.format_assignee_mentions(assignees)
-
-        days_since_update = int(hours_since_update / 24)
 
         comment = f"""🔔 Task Update Reminder
 
@@ -317,29 +313,6 @@ Please provide a status update or move the task forward."""
             'stale_warnings': len(stale_alerts)
         }
 
-    def monitor_continuous(self) -> None:
-        """Run monitoring continuously with intervals"""
-        print(f"\n{'='*60}")
-        print(f"🚀 ClickUp Task Monitor - Continuous Mode")
-        print(f"{'='*60}")
-        print(f"Check interval: Every {CHECK_INTERVAL_MINUTES} minutes")
-        print(f"Deadline warning: {DEADLINE_WARNING_DAYS} days before due")
-        print(f"Stale task threshold: {STALE_TASK_HOURS} hours")
-        print(f"Press Ctrl+C to stop\n")
-
-        try:
-            while True:
-                self.monitor_once()
-
-                next_check = datetime.now() + timedelta(minutes=CHECK_INTERVAL_MINUTES)
-                print(f"\n⏸️  Waiting until next check at {next_check.strftime('%H:%M:%S')}...")
-                print(f"{'='*60}\n")
-
-                time.sleep(CHECK_INTERVAL_MINUTES * 60)
-
-        except KeyboardInterrupt:
-            print("\n\n👋 Monitoring stopped by user")
-
 
 def main():
     # Validate environment variables
@@ -356,14 +329,8 @@ def main():
     # Create monitor instance
     monitor = ClickUpMonitor(CLICKUP_API_TOKEN, WORKSPACE_ID)
 
-    # Run monitoring
-    import sys
-    if len(sys.argv) > 1 and sys.argv[1] == '--once':
-        # Run once and exit
-        monitor.monitor_once()
-    else:
-        # Run continuously
-        monitor.monitor_continuous()
+    # Run check once and exit
+    monitor.monitor_once()
 
 
 if __name__ == '__main__':
