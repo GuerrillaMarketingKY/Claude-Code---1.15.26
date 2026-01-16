@@ -1,3 +1,44 @@
+# Binaries
+/clickup-claude
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Environment files
+.env
+.env.local
+
+# OAuth token storage (stored in ~/.clickup-claude/)
+.clickup-claude/
+
+# Go test files
+*.test
+*.out
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+pip-log.txt
+pip-delete-this-directory.txt
+.env.python
 .env 
 __pycache__/ 
 *.pyc 

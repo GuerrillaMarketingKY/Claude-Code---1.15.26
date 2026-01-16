@@ -1,16 +1,15 @@
 """
-ClickUp Task Monitor - Autonomous monitoring for deadlines and stale tasks
-Monitors all tasks in workspace and sends reminders for:
-- Approaching deadlines (within 2 days)
-- Tasks with no updates in 24+ hours
+ClickUp Task Monitor - Scheduled Work Hours Edition
+Runs 20 minutes on, 20 minutes off during work hours only
 """
 
 import os
 import time
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time
 from dotenv import load_dotenv
 from typing import List, Dict, Optional
+import sys
 
 # Load environment variables
 load_dotenv()
@@ -19,10 +18,18 @@ CLICKUP_API_TOKEN = os.getenv('CLICKUP_API_TOKEN')
 WORKSPACE_ID = os.getenv('WORKSPACE_ID')
 BASE_URL = 'https://api.clickup.com/api/v2'
 
-# Configuration
-CHECK_INTERVAL_MINUTES = 60  # How often to check tasks
-DEADLINE_WARNING_DAYS = 2    # Warn when deadline is within this many days
-STALE_TASK_HOURS = 24       # Consider task stale after this many hours
+# Work Hours Configuration (CST) - Today's Test Schedule (1/16/25)
+WORK_START_HOUR = 9
+WORK_START_MINUTE = 44
+WORK_END_HOUR = 17  # 5 PM in 24-hour format
+WORK_END_MINUTE = 0
+
+# Monitoring Configuration - Today's Test Schedule (15 min on/off)
+CHECK_DURATION_MINUTES = 15  # Run for 15 minutes
+BREAK_DURATION_MINUTES = 15  # Break for 15 minutes
+DEADLINE_WARNING_DAYS = 2
+STALE_TASK_HOURS = 24
+
 
 class ClickUpMonitor:
     def __init__(self, api_token: str, workspace_id: str):
@@ -32,7 +39,7 @@ class ClickUpMonitor:
             'Authorization': api_token,
             'Content-Type': 'application/json'
         }
-        self.processed_reminders = set()  # Track which tasks we've already reminded about
+        self.processed_reminders = set()
 
     def get_all_teams(self) -> List[Dict]:
         """Get all teams in the workspace"""
@@ -95,45 +102,41 @@ class ClickUpMonitor:
     def get_all_tasks(self) -> List[Dict]:
         """Get all active tasks across the entire workspace"""
         all_tasks = []
+        print("📥 Fetching tasks from workspace...")
 
-        print("📥 Fetching all tasks from workspace...")
         teams = self.get_all_teams()
-
         for team in teams:
             team_id = team['id']
             team_name = team['name']
-            print(f"  📁 Team: {team_name}")
+            print(f"  📁 {team_name}")
 
             spaces = self.get_all_spaces(team_id)
             for space in spaces:
                 space_id = space['id']
                 space_name = space['name']
-                print(f"    📂 Space: {space_name}")
 
                 lists = self.get_all_lists(space_id)
                 for list_item in lists:
                     list_id = list_item['id']
                     list_name = list_item['name']
-
                     tasks = self.get_tasks_in_list(list_id)
                     all_tasks.extend(tasks)
-                    print(f"      📋 List: {list_name} ({len(tasks)} tasks)")
+                    if tasks:
+                        print(f"    📋 {list_name} ({len(tasks)} tasks)")
 
-        print(f"\n✓ Total tasks found: {len(all_tasks)}\n")
+        print(f"✓ Total: {len(all_tasks)} tasks\n")
         return all_tasks
 
     def check_approaching_deadline(self, task: Dict) -> Optional[Dict]:
-        """Check if task has a deadline approaching within threshold"""
+        """Check if task has a deadline approaching"""
         due_date_str = task.get('due_date')
         if not due_date_str:
             return None
 
-        # Convert milliseconds timestamp to datetime
         due_date = datetime.fromtimestamp(int(due_date_str) / 1000)
         now = datetime.now()
         time_until_due = due_date - now
 
-        # Check if deadline is within warning period
         if timedelta(0) < time_until_due <= timedelta(days=DEADLINE_WARNING_DAYS):
             hours_remaining = time_until_due.total_seconds() / 3600
             return {
@@ -142,7 +145,6 @@ class ClickUpMonitor:
                 'hours_remaining': hours_remaining,
                 'due_date': due_date
             }
-
         return None
 
     def check_stale_task(self, task: Dict) -> Optional[Dict]:
@@ -151,12 +153,10 @@ class ClickUpMonitor:
         if not date_updated_str:
             return None
 
-        # Convert milliseconds timestamp to datetime
         last_updated = datetime.fromtimestamp(int(date_updated_str) / 1000)
         now = datetime.now()
         hours_since_update = (now - last_updated).total_seconds() / 3600
 
-        # Check if task is stale
         if hours_since_update >= STALE_TASK_HOURS:
             return {
                 'type': 'stale',
@@ -164,7 +164,6 @@ class ClickUpMonitor:
                 'hours_since_update': hours_since_update,
                 'last_updated': last_updated
             }
-
         return None
 
     def add_task_comment(self, task_id: str, comment_text: str) -> bool:
@@ -178,35 +177,25 @@ class ClickUpMonitor:
             response.raise_for_status()
             return True
         except requests.exceptions.RequestException as e:
-            print(f"❌ Error adding comment to task {task_id}: {e}")
+            print(f"❌ Error adding comment: {e}")
             return False
 
     def format_assignee_mentions(self, assignees: List[Dict]) -> str:
-        """Format assignee mentions for comment"""
+        """Format assignee mentions"""
         if not assignees:
             return ""
-
-        mentions = []
-        for assignee in assignees:
-            username = assignee.get('username', 'User')
-            user_id = assignee.get('id')
-            if user_id:
-                mentions.append(f"@{username}")
-
-        return " ".join(mentions) if mentions else ""
+        mentions = [f"@{a.get('username', 'User')}" for a in assignees]
+        return " ".join(mentions)
 
     def process_deadline_warning(self, alert: Dict) -> None:
-        """Send deadline warning comment"""
+        """Send deadline warning"""
         task = alert['task']
         task_id = task['id']
         task_name = task['name']
         hours_remaining = alert['hours_remaining']
         due_date = alert['due_date']
 
-        # Create unique key for this reminder
         reminder_key = f"deadline_{task_id}_{due_date.date()}"
-
-        # Skip if we've already sent this reminder
         if reminder_key in self.processed_reminders:
             return
 
@@ -229,30 +218,25 @@ This task is due in **{time_desc}** ({due_date.strftime('%Y-%m-%d %H:%M')}).
 
 Please update the status or adjust the deadline if needed."""
 
-        print(f"⏰ {urgency}: {task_name} (due in {time_desc})")
-
+        print(f"⏰ {task_name} (due in {time_desc})")
         if self.add_task_comment(task_id, comment):
             self.processed_reminders.add(reminder_key)
-            print(f"   ✓ Reminder sent to task {task_id}")
+            print(f"   ✓ Reminder sent")
 
     def process_stale_task_warning(self, alert: Dict) -> None:
-        """Send stale task warning comment"""
+        """Send stale task warning"""
         task = alert['task']
         task_id = task['id']
         task_name = task['name']
         hours_since_update = alert['hours_since_update']
         last_updated = alert['last_updated']
 
-        # Create unique key for this reminder (once per day)
         reminder_key = f"stale_{task_id}_{datetime.now().date()}"
-
-        # Skip if we've already sent this reminder today
         if reminder_key in self.processed_reminders:
             return
 
         assignees = task.get('assignees', [])
         mentions = self.format_assignee_mentions(assignees)
-
         days_since_update = int(hours_since_update / 24)
 
         comment = f"""🔔 Task Update Reminder
@@ -263,53 +247,43 @@ This task hasn't been updated in **{days_since_update} day{'s' if days_since_upd
 
 Please provide a status update or move the task forward."""
 
-        print(f"💤 Stale: {task_name} ({days_since_update} days since update)")
-
+        print(f"💤 {task_name} ({days_since_update}d stale)")
         if self.add_task_comment(task_id, comment):
             self.processed_reminders.add(reminder_key)
-            print(f"   ✓ Reminder sent to task {task_id}")
+            print(f"   ✓ Reminder sent")
 
     def monitor_once(self) -> Dict[str, int]:
         """Run a single monitoring check"""
-        print(f"\n{'='*60}")
-        print(f"🔍 Starting monitoring check at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"{'='*60}\n")
-
         tasks = self.get_all_tasks()
 
         deadline_alerts = []
         stale_alerts = []
 
-        # Check each task
         for task in tasks:
-            # Check for approaching deadlines
             deadline_alert = self.check_approaching_deadline(task)
             if deadline_alert:
                 deadline_alerts.append(deadline_alert)
 
-            # Check for stale tasks
             stale_alert = self.check_stale_task(task)
             if stale_alert:
                 stale_alerts.append(stale_alert)
 
-        # Process alerts
-        print(f"\n📊 Monitoring Results:")
-        print(f"   Deadline warnings: {len(deadline_alerts)}")
-        print(f"   Stale task warnings: {len(stale_alerts)}")
-        print()
+        print(f"📊 Results: {len(deadline_alerts)} deadline, {len(stale_alerts)} stale\n")
 
         if deadline_alerts:
-            print("\n⏰ Deadline Warnings:\n")
+            print("⏰ Deadline Warnings:")
             for alert in deadline_alerts:
                 self.process_deadline_warning(alert)
+            print()
 
         if stale_alerts:
-            print("\n💤 Stale Task Warnings:\n")
+            print("💤 Stale Tasks:")
             for alert in stale_alerts:
                 self.process_stale_task_warning(alert)
+            print()
 
         if not deadline_alerts and not stale_alerts:
-            print("✓ No alerts at this time - all tasks are on track!\n")
+            print("✅ All tasks on track!\n")
 
         return {
             'total_tasks': len(tasks),
@@ -317,53 +291,102 @@ Please provide a status update or move the task forward."""
             'stale_warnings': len(stale_alerts)
         }
 
-    def monitor_continuous(self) -> None:
-        """Run monitoring continuously with intervals"""
-        print(f"\n{'='*60}")
-        print(f"🚀 ClickUp Task Monitor - Continuous Mode")
-        print(f"{'='*60}")
-        print(f"Check interval: Every {CHECK_INTERVAL_MINUTES} minutes")
-        print(f"Deadline warning: {DEADLINE_WARNING_DAYS} days before due")
-        print(f"Stale task threshold: {STALE_TASK_HOURS} hours")
-        print(f"Press Ctrl+C to stop\n")
 
-        try:
-            while True:
-                self.monitor_once()
+def is_within_work_hours() -> bool:
+    """Check if current time is within work hours (CST)"""
+    now = datetime.now()
+    current_time = now.time()
 
-                next_check = datetime.now() + timedelta(minutes=CHECK_INTERVAL_MINUTES)
-                print(f"\n⏸️  Waiting until next check at {next_check.strftime('%H:%M:%S')}...")
-                print(f"{'='*60}\n")
+    start_time = dt_time(WORK_START_HOUR, WORK_START_MINUTE)
+    end_time = dt_time(WORK_END_HOUR, WORK_END_MINUTE)
 
-                time.sleep(CHECK_INTERVAL_MINUTES * 60)
+    return start_time <= current_time <= end_time
 
-        except KeyboardInterrupt:
-            print("\n\n👋 Monitoring stopped by user")
+
+def get_next_check_time() -> datetime:
+    """Calculate next check time (after break)"""
+    return datetime.now() + timedelta(minutes=BREAK_DURATION_MINUTES)
+
+
+def get_work_end_time() -> datetime:
+    """Get today's work end time"""
+    now = datetime.now()
+    return now.replace(hour=WORK_END_HOUR, minute=WORK_END_MINUTE, second=0, microsecond=0)
 
 
 def main():
-    # Validate environment variables
-    if not CLICKUP_API_TOKEN:
-        print("❌ Error: CLICKUP_API_TOKEN not found in environment")
-        print("   Please set it in your .env file")
+    print(f"""
+{'='*70}
+🕐 ClickUp Monitor - Scheduled Work Hours Mode
+{'='*70}
+Schedule: {WORK_START_HOUR}:{WORK_START_MINUTE:02d} - {WORK_END_HOUR}:{WORK_END_MINUTE:02d} CST
+Pattern:  {CHECK_DURATION_MINUTES} min ON / {BREAK_DURATION_MINUTES} min OFF
+Deadline: {DEADLINE_WARNING_DAYS} days warning
+Stale:    {STALE_TASK_HOURS} hours threshold
+{'='*70}
+""")
+
+    # Validate credentials
+    if not CLICKUP_API_TOKEN or not WORKSPACE_ID:
+        print("❌ Missing credentials in .env file")
+        print("   Need: CLICKUP_API_TOKEN and WORKSPACE_ID")
         return
 
-    if not WORKSPACE_ID:
-        print("❌ Error: WORKSPACE_ID not found in environment")
-        print("   Please set it in your .env file")
+    # Check if we're in work hours
+    if not is_within_work_hours():
+        now = datetime.now()
+        print(f"⏸️  Outside work hours ({now.strftime('%I:%M %p')})")
+        print(f"   Work hours: {WORK_START_HOUR}:{WORK_START_MINUTE:02d} AM - {WORK_END_HOUR}:{WORK_END_MINUTE:02d} PM CST")
         return
 
-    # Create monitor instance
     monitor = ClickUpMonitor(CLICKUP_API_TOKEN, WORKSPACE_ID)
 
-    # Run monitoring
-    import sys
-    if len(sys.argv) > 1 and sys.argv[1] == '--once':
-        # Run once and exit
-        monitor.monitor_once()
-    else:
-        # Run continuously
-        monitor.monitor_continuous()
+    try:
+        cycle_num = 1
+        while is_within_work_hours():
+            work_end = get_work_end_time()
+            time_until_end = work_end - datetime.now()
+
+            print(f"\n{'='*70}")
+            print(f"🔄 Cycle #{cycle_num} - {datetime.now().strftime('%I:%M:%S %p')}")
+            print(f"   Time until 5 PM: {int(time_until_end.total_seconds() / 60)} minutes")
+            print(f"{'='*70}\n")
+
+            # Monitor for CHECK_DURATION_MINUTES
+            check_end_time = datetime.now() + timedelta(minutes=CHECK_DURATION_MINUTES)
+
+            while datetime.now() < check_end_time and is_within_work_hours():
+                print(f"🔍 Check at {datetime.now().strftime('%I:%M %p')}")
+                monitor.monitor_once()
+
+                # Wait 5 minutes before next check within this cycle
+                if datetime.now() < check_end_time:
+                    wait_mins = min(5, (check_end_time - datetime.now()).total_seconds() / 60)
+                    if wait_mins > 0:
+                        print(f"⏸️  Waiting {int(wait_mins)} min until next check...")
+                        time.sleep(wait_mins * 60)
+
+            # Break time
+            if is_within_work_hours():
+                next_check = get_next_check_time()
+
+                # Don't start break if we're past work hours
+                if next_check > work_end:
+                    print(f"\n🏁 Work day complete at {datetime.now().strftime('%I:%M %p')}")
+                    break
+
+                print(f"\n☕ Break time! Next cycle at {next_check.strftime('%I:%M %p')}")
+                print(f"{'='*70}\n")
+
+                time.sleep(BREAK_DURATION_MINUTES * 60)
+                cycle_num += 1
+
+        print(f"\n{'='*70}")
+        print(f"🏁 Monitoring complete - Outside work hours")
+        print(f"{'='*70}\n")
+
+    except KeyboardInterrupt:
+        print("\n\n👋 Monitoring stopped by user\n")
 
 
 if __name__ == '__main__':
