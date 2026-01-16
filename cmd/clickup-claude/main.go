@@ -77,28 +77,30 @@ func printUsage() {
 	fmt.Println("ClickUp Claude - Autonomous Task Execution")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  clickup-claude auth                Authenticate with ClickUp OAuth")
-	fmt.Println("  clickup-claude logout              Clear stored authentication")
 	fmt.Println("  clickup-claude execute <task-id>   Execute a ClickUp task autonomously")
 	fmt.Println("  clickup-claude status <task-id>    Show task information")
+	fmt.Println("  clickup-claude auth                Authenticate with ClickUp OAuth (optional)")
+	fmt.Println("  clickup-claude logout              Clear stored OAuth token")
 	fmt.Println("  clickup-claude help                Show this help message")
 	fmt.Println()
+	fmt.Println("Authentication Methods:")
+	fmt.Println("  1. Direct Access Token (Recommended - Simplest)")
+	fmt.Println("     export CLICKUP_ACCESS_TOKEN='your_token_here'")
+	fmt.Println()
+	fmt.Println("  2. OAuth Flow (Advanced)")
+	fmt.Println("     export CLICKUP_CLIENT_ID='your_client_id'")
+	fmt.Println("     export CLICKUP_CLIENT_SECRET='your_client_secret'")
+	fmt.Println("     ./clickup-claude auth")
+	fmt.Println()
 	fmt.Println("Environment Variables:")
-	fmt.Println("  CLICKUP_CLIENT_ID       Your ClickUp OAuth Client ID (required)")
-	fmt.Println("  CLICKUP_CLIENT_SECRET   Your ClickUp OAuth Client Secret (required)")
+	fmt.Println("  CLICKUP_ACCESS_TOKEN    Your ClickUp access token (recommended)")
+	fmt.Println("  CLICKUP_CLIENT_ID       OAuth Client ID (for OAuth flow)")
+	fmt.Println("  CLICKUP_CLIENT_SECRET   OAuth Client Secret (for OAuth flow)")
 	fmt.Println("  GITHUB_REPO             GitHub repository name (optional)")
 	fmt.Println()
-	fmt.Println("Getting Started:")
-	fmt.Println("  1. Create a ClickUp OAuth app: https://app.clickup.com/settings/apps")
-	fmt.Println("  2. Set environment variables with your OAuth credentials")
-	fmt.Println("  3. Run 'clickup-claude auth' to authenticate")
-	fmt.Println("  4. Run 'clickup-claude execute <task-id>' to execute tasks")
-	fmt.Println()
-	fmt.Println("Example:")
-	fmt.Println("  export CLICKUP_CLIENT_ID='your_client_id'")
-	fmt.Println("  export CLICKUP_CLIENT_SECRET='your_client_secret'")
-	fmt.Println("  clickup-claude auth")
-	fmt.Println("  clickup-claude execute abc123")
+	fmt.Println("Quick Start:")
+	fmt.Println("  export CLICKUP_ACCESS_TOKEN='your_token_here'")
+	fmt.Println("  ./clickup-claude execute <task-id>")
 }
 
 func getStatusEmoji(success bool) string {
@@ -194,20 +196,35 @@ func executeTaskOAuth(taskID string) {
 	fmt.Println("🚀 ClickUp Claude - Autonomous Task Execution")
 	fmt.Println("============================================\n")
 
-	// Create token storage
-	storage, err := auth.NewTokenStorage()
+	// Load config
+	cfg, err := config.Load()
 	if err != nil {
-		fmt.Printf("❌ Failed to create token storage: %v\n", err)
+		fmt.Printf("❌ Configuration error: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Create ClickUp client from stored token
-	fmt.Printf("🔑 Loading authentication token...\n")
-	client, err := clickup.NewClientFromStorage(storage)
-	if err != nil {
-		fmt.Printf("❌ %v\n", err)
-		fmt.Println("\n💡 Tip: Run 'clickup-claude auth' to authenticate first.")
-		os.Exit(1)
+	var client *clickup.Client
+
+	// Try direct access token first (simpler method)
+	if cfg.AccessToken != "" {
+		fmt.Println("🔑 Using direct access token")
+		client = clickup.NewClient(cfg.AccessToken)
+	} else {
+		// Fall back to OAuth stored token
+		storage, err := auth.NewTokenStorage()
+		if err != nil {
+			fmt.Printf("❌ Failed to create token storage: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("🔑 Loading OAuth token from storage...\n")
+		client, err = clickup.NewClientFromStorage(storage)
+		if err != nil {
+			fmt.Printf("❌ %v\n", err)
+			fmt.Println("\n💡 Tip: Run 'clickup-claude auth' to authenticate first,")
+			fmt.Println("   or set CLICKUP_ACCESS_TOKEN environment variable.")
+			os.Exit(1)
+		}
 	}
 	fmt.Println("✓ Authentication loaded\n")
 
@@ -263,19 +280,33 @@ func executeTaskOAuth(taskID string) {
 }
 
 func showTaskStatusOAuth(taskID string) {
-	// Create token storage
-	storage, err := auth.NewTokenStorage()
+	// Load config
+	cfg, err := config.Load()
 	if err != nil {
-		fmt.Printf("❌ Failed to create token storage: %v\n", err)
+		fmt.Printf("❌ Configuration error: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Create client from stored token
-	client, err := clickup.NewClientFromStorage(storage)
-	if err != nil {
-		fmt.Printf("❌ %v\n", err)
-		fmt.Println("\n💡 Tip: Run 'clickup-claude auth' to authenticate first.")
-		os.Exit(1)
+	var client *clickup.Client
+
+	// Try direct access token first
+	if cfg.AccessToken != "" {
+		client = clickup.NewClient(cfg.AccessToken)
+	} else {
+		// Fall back to OAuth
+		storage, err := auth.NewTokenStorage()
+		if err != nil {
+			fmt.Printf("❌ Failed to create token storage: %v\n", err)
+			os.Exit(1)
+		}
+
+		client, err = clickup.NewClientFromStorage(storage)
+		if err != nil {
+			fmt.Printf("❌ %v\n", err)
+			fmt.Println("\n💡 Tip: Set CLICKUP_ACCESS_TOKEN environment variable")
+			fmt.Println("   or run 'clickup-claude auth' to authenticate.")
+			os.Exit(1)
+		}
 	}
 
 	fmt.Printf("📥 Fetching task %s...\n\n", taskID)

@@ -6,34 +6,38 @@ import (
 )
 
 type Config struct {
-	// OAuth Configuration
+	// Direct Access Token (preferred)
+	AccessToken string
+
+	// OAuth Configuration (optional)
 	OAuthClientID     string
 	OAuthClientSecret string
 
 	// Repository configuration
-	GitHubRepo      string
+	GitHubRepo string
 }
 
 // Load reads configuration from environment variables
 func Load() (*Config, error) {
-	clientID := os.Getenv("CLICKUP_CLIENT_ID")
-	if clientID == "" {
-		return nil, fmt.Errorf("CLICKUP_CLIENT_ID environment variable is required")
-	}
-
-	clientSecret := os.Getenv("CLICKUP_CLIENT_SECRET")
-	if clientSecret == "" {
-		return nil, fmt.Errorf("CLICKUP_CLIENT_SECRET environment variable is required")
-	}
+	// Check for direct access token first (simpler method)
+	accessToken := os.Getenv("CLICKUP_ACCESS_TOKEN")
 
 	githubRepo := os.Getenv("GITHUB_REPO")
 	if githubRepo == "" {
 		githubRepo = "default-repo" // Optional, can be inferred from git
 	}
 
-	return &Config{
-		OAuthClientID:     clientID,
-		OAuthClientSecret: clientSecret,
+	cfg := &Config{
+		AccessToken:       accessToken,
+		OAuthClientID:     os.Getenv("CLICKUP_CLIENT_ID"),
+		OAuthClientSecret: os.Getenv("CLICKUP_CLIENT_SECRET"),
 		GitHubRepo:        githubRepo,
-	}, nil
+	}
+
+	// Validate that we have either direct token or OAuth credentials
+	if cfg.AccessToken == "" && (cfg.OAuthClientID == "" || cfg.OAuthClientSecret == "") {
+		return nil, fmt.Errorf("either CLICKUP_ACCESS_TOKEN or both CLICKUP_CLIENT_ID and CLICKUP_CLIENT_SECRET are required")
+	}
+
+	return cfg, nil
 }
