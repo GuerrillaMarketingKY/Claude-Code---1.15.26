@@ -6,7 +6,7 @@ echo.
 echo Checking your ClickUp workspace...
 echo.
 
-python src\clickup_monitor.py --once
+python src\clickup_monitor.py
 
 echo.
 echo ==========================================
