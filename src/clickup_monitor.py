@@ -2,7 +2,8 @@
 ClickUp Task Monitor - Simple on-demand task checker
 Checks all tasks in workspace for:
 - Approaching deadlines (within 2 days)
-- Stale tasks (no updates in 7+ days)
+- Stale tasks (7-30 days without updates)
+- Old tasks (30+ days - recommends archiving instead of alerting)
 """
 
 import os
@@ -21,6 +22,7 @@ BASE_URL = 'https://api.clickup.com/api/v2'
 # Configuration
 DEADLINE_WARNING_DAYS = 2    # Warn when deadline is within this many days
 STALE_TASK_DAYS = 7          # Consider task stale after this many days
+ARCHIVE_THRESHOLD_DAYS = 30  # Tasks older than this should be archived
 
 class ClickUpMonitor:
     def __init__(self, api_token: str, workspace_id: str):
@@ -144,7 +146,7 @@ class ClickUpMonitor:
         return None
 
     def check_stale_task(self, task: Dict) -> Optional[Dict]:
-        """Check if task hasn't been updated recently"""
+        """Check if task hasn't been updated recently (7-30 days)"""
         date_updated_str = task.get('date_updated')
         if not date_updated_str:
             return None
@@ -154,8 +156,9 @@ class ClickUpMonitor:
         now = datetime.now()
         days_since_update = (now - last_updated).days
 
-        # Check if task is stale (using DAYS now, not hours)
-        if days_since_update >= STALE_TASK_DAYS:
+        # Only alert on tasks between 7-30 days stale
+        # Tasks over 30 days should be archived instead
+        if STALE_TASK_DAYS <= days_since_update < ARCHIVE_THRESHOLD_DAYS:
             return {
                 'type': 'stale',
                 'task': task,
@@ -164,6 +167,20 @@ class ClickUpMonitor:
             }
 
         return None
+
+    def check_old_task(self, task: Dict) -> bool:
+        """Check if task is older than archive threshold (30+ days)"""
+        date_updated_str = task.get('date_updated')
+        if not date_updated_str:
+            return False
+
+        # Convert milliseconds timestamp to datetime
+        last_updated = datetime.fromtimestamp(int(date_updated_str) / 1000)
+        now = datetime.now()
+        days_since_update = (now - last_updated).days
+
+        # Return True if task is 30+ days old
+        return days_since_update >= ARCHIVE_THRESHOLD_DAYS
 
     def add_task_comment(self, task_id: str, comment_text: str) -> bool:
         """Add a comment to a task"""
@@ -275,6 +292,7 @@ Please provide a status update or move the task forward."""
 
         deadline_alerts = []
         stale_alerts = []
+        old_tasks_count = 0
 
         # Check each task
         for task in tasks:
@@ -283,15 +301,21 @@ Please provide a status update or move the task forward."""
             if deadline_alert:
                 deadline_alerts.append(deadline_alert)
 
-            # Check for stale tasks
+            # Check for stale tasks (7-30 days)
             stale_alert = self.check_stale_task(task)
             if stale_alert:
                 stale_alerts.append(stale_alert)
 
+            # Count old tasks (30+ days) - these should be archived
+            if self.check_old_task(task):
+                old_tasks_count += 1
+
         # Process alerts
         print(f"\n📊 Monitoring Results:")
         print(f"   Deadline warnings: {len(deadline_alerts)}")
-        print(f"   Stale task warnings: {len(stale_alerts)}")
+        print(f"   Stale task warnings: {len(stale_alerts)} (7-30 days old)")
+        if old_tasks_count > 0:
+            print(f"   📦 Old tasks found: {old_tasks_count} (30+ days - ready for archive)")
         print()
 
         if deadline_alerts:
@@ -307,10 +331,22 @@ Please provide a status update or move the task forward."""
         if not deadline_alerts and not stale_alerts:
             print("✓ No alerts at this time - all tasks are on track!\n")
 
+        # Notify user about old tasks that should be archived
+        if old_tasks_count > 0:
+            print(f"\n{'='*60}")
+            print(f"📦 Archive Recommendation")
+            print(f"{'='*60}")
+            print(f"Found {old_tasks_count} tasks older than {ARCHIVE_THRESHOLD_DAYS} days.")
+            print(f"These tasks are NOT receiving reminders.")
+            print(f"\nTo move them to 'Task Archive - Needs Reviewed', run:")
+            print(f"   python src\\archive_old_tasks.py")
+            print(f"{'='*60}\n")
+
         return {
             'total_tasks': len(tasks),
             'deadline_warnings': len(deadline_alerts),
-            'stale_warnings': len(stale_alerts)
+            'stale_warnings': len(stale_alerts),
+            'old_tasks': old_tasks_count
         }
 
 
