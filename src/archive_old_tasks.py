@@ -19,12 +19,27 @@ ARCHIVE_AFTER_DAYS = 30
 ARCHIVE_LIST_NAME = "Task Archive - Needs Review"
 
 class ClickUpArchiver:
-    def __init__(self, api_token: str):
+    def __init__(self, api_token: str, workspace_id: str):
         self.api_token = api_token
+        self.workspace_id = workspace_id
         self.headers = {
             'Authorization': api_token,
             'Content-Type': 'application/json'
         }
+
+    def get_all_spaces(self):
+        """Get all spaces in the workspace"""
+        try:
+            response = requests.get(
+                f'{BASE_URL}/team/{self.workspace_id}/space',
+                headers=self.headers,
+                params={'archived': 'false'}
+            )
+            response.raise_for_status()
+            return response.json().get('spaces', [])
+        except Exception as e:
+            print(f"Error fetching spaces: {e}")
+            return []
 
     def get_all_lists(self, space_id: str):
         """Get all lists in a space"""
@@ -68,65 +83,76 @@ class ClickUpArchiver:
             print(f"Error moving task: {e}")
             return False
 
-    def find_archive_list(self, space_id: str):
-        """Find or suggest creating the archive list"""
-        lists = self.get_all_lists(space_id)
-        for lst in lists:
-            if ARCHIVE_LIST_NAME.lower() in lst['name'].lower():
-                return lst['id']
-        return None
+    def find_archive_list(self):
+        """Find the archive list across all spaces"""
+        spaces = self.get_all_spaces()
+        for space in spaces:
+            lists = self.get_all_lists(space['id'])
+            for lst in lists:
+                if ARCHIVE_LIST_NAME.lower() in lst['name'].lower():
+                    return lst['id'], space['name']
+        return None, None
 
-    def archive_old_tasks(self, space_id: str):
-        """Archive tasks older than threshold"""
+    def archive_old_tasks(self):
+        """Archive tasks older than threshold from all spaces"""
         print(f"\n🗂️  Archiving tasks older than {ARCHIVE_AFTER_DAYS} days...")
-        print(f"Target: {ARCHIVE_LIST_NAME}\n")
+        print(f"Target: {ARCHIVE_LIST_NAME}")
+        print(f"Scanning all spaces in workspace...\n")
 
-        # Find archive list
-        archive_list_id = self.find_archive_list(space_id)
+        # Find archive list across all spaces
+        archive_list_id, archive_space_name = self.find_archive_list()
         if not archive_list_id:
             print(f"❌ Archive list '{ARCHIVE_LIST_NAME}' not found!")
-            print(f"   Please create this list in your space first.")
+            print(f"   Please create this list in any space first.")
             return
 
-        print(f"✓ Found archive list\n")
+        print(f"✓ Found archive list in '{archive_space_name}' space\n")
 
-        cutoff_date = datetime.now() - timedelta(days=ARCHIVE_AFTER_DAYS)
-        lists = self.get_all_lists(space_id)
-
+        # Get all spaces
+        spaces = self.get_all_spaces()
         archived_count = 0
         skipped_count = 0
 
-        for lst in lists:
-            # Skip the archive list itself
-            if lst['id'] == archive_list_id:
-                continue
+        # Process each space
+        for space in spaces:
+            space_name = space['name']
+            print(f"  📁 Scanning space: {space_name}")
 
-            list_name = lst['name']
-            tasks = self.get_tasks_in_list(lst['id'])
+            lists = self.get_all_lists(space['id'])
 
-            for task in tasks:
-                date_updated_str = task.get('date_updated')
-                if not date_updated_str:
+            for lst in lists:
+                # Skip the archive list itself
+                if lst['id'] == archive_list_id:
                     continue
 
-                last_updated = datetime.fromtimestamp(int(date_updated_str) / 1000)
-                days_old = (datetime.now() - last_updated).days
+                list_name = lst['name']
+                tasks = self.get_tasks_in_list(lst['id'])
 
-                if days_old >= ARCHIVE_AFTER_DAYS:
-                    task_name = task['name']
-                    print(f"📦 Archiving: {task_name} ({days_old}d old)")
+                for task in tasks:
+                    date_updated_str = task.get('date_updated')
+                    if not date_updated_str:
+                        continue
 
-                    if self.move_task_to_list(task['id'], archive_list_id):
-                        archived_count += 1
-                        print(f"   ✓ Moved to archive")
-                    else:
-                        skipped_count += 1
-                        print(f"   ✗ Failed to move")
+                    last_updated = datetime.fromtimestamp(int(date_updated_str) / 1000)
+                    days_old = (datetime.now() - last_updated).days
 
-        print(f"\n📊 Summary:")
+                    if days_old >= ARCHIVE_AFTER_DAYS:
+                        task_name = task['name']
+                        print(f"     📦 Archiving: {task_name} ({days_old}d old)")
+
+                        if self.move_task_to_list(task['id'], archive_list_id):
+                            archived_count += 1
+                            print(f"        ✓ Moved to archive")
+                        else:
+                            skipped_count += 1
+                            print(f"        ✗ Failed to move")
+
+        print(f"\n{'='*60}")
+        print(f"📊 Summary:")
         print(f"   Archived: {archived_count} tasks")
         if skipped_count > 0:
             print(f"   Failed: {skipped_count} tasks")
+        print(f"{'='*60}")
 
 
 def main():
@@ -138,16 +164,12 @@ def main():
         print("\n❌ CLICKUP_API_TOKEN not found in .env")
         return
 
-    archiver = ClickUpArchiver(CLICKUP_API_TOKEN)
+    if not WORKSPACE_ID:
+        print("\n❌ WORKSPACE_ID not found in .env")
+        return
 
-    # You'll need to provide your space ID
-    # Get it from ClickUp URL: app.clickup.com/WORKSPACE_ID/v/l/SPACE_ID
-    space_id = input("\nEnter your Space ID (from ClickUp URL): ").strip()
-
-    if space_id:
-        archiver.archive_old_tasks(space_id)
-    else:
-        print("❌ Space ID required")
+    archiver = ClickUpArchiver(CLICKUP_API_TOKEN, WORKSPACE_ID)
+    archiver.archive_old_tasks()
 
 if __name__ == '__main__':
     main()
