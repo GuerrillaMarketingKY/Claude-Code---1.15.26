@@ -22,7 +22,7 @@ BASE_URL = 'https://api.clickup.com/api/v2'
 # Configuration
 CHECK_INTERVAL_MINUTES = 60  # How often to check tasks
 DEADLINE_WARNING_DAYS = 2    # Warn when deadline is within this many days
-STALE_TASK_HOURS = 24       # Consider task stale after this many hours
+STALE_TASK_DAYS = 7          # Consider task stale after this many DAYS (was 24 hours)
 
 class ClickUpMonitor:
     def __init__(self, api_token: str, workspace_id: str):
@@ -154,14 +154,14 @@ class ClickUpMonitor:
         # Convert milliseconds timestamp to datetime
         last_updated = datetime.fromtimestamp(int(date_updated_str) / 1000)
         now = datetime.now()
-        hours_since_update = (now - last_updated).total_seconds() / 3600
+        days_since_update = (now - last_updated).days
 
-        # Check if task is stale
-        if hours_since_update >= STALE_TASK_HOURS:
+        # Check if task is stale (using DAYS now, not hours)
+        if days_since_update >= STALE_TASK_DAYS:
             return {
                 'type': 'stale',
                 'task': task,
-                'hours_since_update': hours_since_update,
+                'days_since_update': days_since_update,
                 'last_updated': last_updated
             }
 
@@ -240,7 +240,7 @@ Please update the status or adjust the deadline if needed."""
         task = alert['task']
         task_id = task['id']
         task_name = task['name']
-        hours_since_update = alert['hours_since_update']
+        days_since_update = alert['days_since_update']
         last_updated = alert['last_updated']
 
         # Create unique key for this reminder (once per day)
@@ -252,8 +252,6 @@ Please update the status or adjust the deadline if needed."""
 
         assignees = task.get('assignees', [])
         mentions = self.format_assignee_mentions(assignees)
-
-        days_since_update = int(hours_since_update / 24)
 
         comment = f"""🔔 Task Update Reminder
 
@@ -324,7 +322,7 @@ Please provide a status update or move the task forward."""
         print(f"{'='*60}")
         print(f"Check interval: Every {CHECK_INTERVAL_MINUTES} minutes")
         print(f"Deadline warning: {DEADLINE_WARNING_DAYS} days before due")
-        print(f"Stale task threshold: {STALE_TASK_HOURS} hours")
+        print(f"Stale task threshold: {STALE_TASK_DAYS} days")
         print(f"Press Ctrl+C to stop\n")
 
         try:
