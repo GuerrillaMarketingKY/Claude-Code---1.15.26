@@ -88,7 +88,7 @@ class ClickUpArchiver:
             return None
 
     def move_task_to_list(self, task_id: str, target_list_id: str, task_name: str = ""):
-        """Move a task to another list (must be in same space)"""
+        """Move a task to another list and verify it worked"""
         try:
             response = requests.put(
                 f'{BASE_URL}/task/{task_id}',
@@ -97,7 +97,25 @@ class ClickUpArchiver:
             )
 
             if response.status_code == 200:
-                return True
+                # Verify the task actually moved by checking its new list
+                verify_response = requests.get(
+                    f'{BASE_URL}/task/{task_id}',
+                    headers=self.headers
+                )
+
+                if verify_response.status_code == 200:
+                    task_data = verify_response.json()
+                    actual_list_id = task_data.get('list', {}).get('id', '')
+
+                    if actual_list_id == target_list_id:
+                        return True
+                    else:
+                        print(f"        ✗ Move rejected: Task stayed in list {actual_list_id}")
+                        print(f"        (ClickUp likely blocked cross-space move)")
+                        return False
+                else:
+                    print(f"        ✗ Verification failed: HTTP {verify_response.status_code}")
+                    return False
             else:
                 print(f"        ✗ Failed: HTTP {response.status_code} - {response.text[:100]}")
                 return False
@@ -151,67 +169,105 @@ class ClickUpArchiver:
         return all_tasks
 
     def archive_old_tasks(self):
-        """Archive tasks older than threshold - move all to Production archive"""
+        """Archive tasks older than threshold - create archive in each space"""
         print(f"\n🗂️  Archiving tasks older than {ARCHIVE_AFTER_DAYS} days...")
-        print(f"Target: {ARCHIVE_LIST_NAME} (Production space)")
-        print(f"Scanning all spaces in workspace...\n")
+        print(f"Strategy: Create '{ARCHIVE_LIST_NAME}' in each space")
+        print(f"(ClickUp blocks cross-space task moves)\n")
 
-        # HARDCODED: Production space archive list ID (from user)
-        PRODUCTION_ARCHIVE_LIST_ID = "901324425454"
+        # Get all spaces
+        spaces = self.get_all_spaces()
+        total_archived = 0
+        total_failed = 0
 
-        # Get all tasks across all spaces
-        print("Fetching all tasks across workspace...\n")
-        all_tasks = self.get_all_tasks_across_workspace()
+        # Process each space separately
+        for space in spaces:
+            space_id = space['id']
+            space_name = space['name']
 
-        print(f"\n✓ Total tasks found: {len(all_tasks)}\n")
+            print(f"{'='*60}")
+            print(f"  📁 Space: {space_name}")
+            print(f"{'='*60}")
 
-        # Find tasks older than 30 days
-        old_tasks = []
-        for task in all_tasks:
-            date_updated_str = task.get('date_updated')
-            if not date_updated_str:
+            # Get all lists in this space
+            lists = self.get_all_lists(space_id)
+
+            # Find old tasks in this space
+            old_tasks_in_space = []
+
+            for lst in lists:
+                # Skip if this IS the archive list
+                if ARCHIVE_LIST_NAME.lower() in lst['name'].lower():
+                    continue
+
+                list_name = lst['name']
+                tasks = self.get_tasks_in_list(lst['id'])
+
+                for task in tasks:
+                    date_updated_str = task.get('date_updated')
+                    if not date_updated_str:
+                        continue
+
+                    last_updated = datetime.fromtimestamp(int(date_updated_str) / 1000)
+                    days_old = (datetime.now() - last_updated).days
+
+                    if days_old >= ARCHIVE_AFTER_DAYS:
+                        task['_source_list'] = list_name
+                        task['_days_old'] = days_old
+                        old_tasks_in_space.append(task)
+
+            if not old_tasks_in_space:
+                print(f"  ✓ No old tasks in this space\n")
                 continue
 
-            last_updated = datetime.fromtimestamp(int(date_updated_str) / 1000)
-            days_old = (datetime.now() - last_updated).days
+            print(f"  Found {len(old_tasks_in_space)} old tasks in this space")
 
-            if days_old >= ARCHIVE_AFTER_DAYS:
-                old_tasks.append((task, days_old))
+            # Find or create archive list in THIS space
+            archive_list_id, was_created = self.find_or_create_archive_list(space_id, space_name)
 
-        print(f"Found {len(old_tasks)} tasks older than {ARCHIVE_AFTER_DAYS} days\n")
+            if not archive_list_id:
+                print(f"  ❌ Could not find/create archive list")
+                total_failed += len(old_tasks_in_space)
+                print()
+                continue
 
-        if not old_tasks:
-            print("✓ No old tasks to archive!")
-            return
-
-        # Move all old tasks to Production archive
-        archived_count = 0
-        skipped_count = 0
-
-        print(f"Moving tasks to archive list (ID: {PRODUCTION_ARCHIVE_LIST_ID})...\n")
-
-        for task, days_old in old_tasks:
-            task_name = task['name']
-            task_id = task['id']
-            source_space = task.get('_source_space', 'Unknown')
-            source_list = task.get('_source_list', 'Unknown')
-
-            print(f"📦 {task_name}")
-            print(f"   From: {source_space} / {source_list} ({days_old}d old)")
-
-            if self.move_task_to_list(task_id, PRODUCTION_ARCHIVE_LIST_ID, task_name):
-                archived_count += 1
-                print(f"   ✓ Moved to archive")
+            if was_created:
+                print(f"  ✓ Created new archive list")
             else:
-                skipped_count += 1
-                # Error already printed by move_task_to_list
-            print()  # Blank line
+                print(f"  ✓ Using existing archive list")
+
+            print(f"\n  Moving {len(old_tasks_in_space)} tasks to archive...\n")
+
+            # Move tasks to archive within same space
+            space_archived = 0
+            space_failed = 0
+
+            for task in old_tasks_in_space:
+                task_name = task['name']
+                task_id = task['id']
+                source_list = task.get('_source_list', 'Unknown')
+                days_old = task.get('_days_old', 0)
+
+                print(f"  📦 {task_name[:60]}...")
+                print(f"     From: {source_list} ({days_old}d old)")
+
+                if self.move_task_to_list(task_id, archive_list_id, task_name):
+                    space_archived += 1
+                    print(f"     ✓ Moved to archive")
+                else:
+                    space_failed += 1
+                    # Error already printed by move_task_to_list
+                print()
+
+            total_archived += space_archived
+            total_failed += space_failed
+
+            print(f"  Space summary: {space_archived} archived, {space_failed} failed\n")
 
         print(f"{'='*60}")
-        print(f"📊 Summary:")
-        print(f"   Archived: {archived_count} tasks")
-        if skipped_count > 0:
-            print(f"   Skipped/Failed: {skipped_count} tasks")
+        print(f"📊 Final Summary:")
+        print(f"   Successfully archived: {total_archived} tasks")
+        if total_failed > 0:
+            print(f"   Failed: {total_failed} tasks")
         print(f"{'='*60}")
 
 
