@@ -16,7 +16,7 @@ BASE_URL = 'https://api.clickup.com/api/v2'
 
 # Configuration
 ARCHIVE_AFTER_DAYS = 30
-ARCHIVE_LIST_NAME = "Task Archive - Needs Reviewed"
+ARCHIVE_LIST_NAME = "Task Archive - Needs Review"
 
 class ClickUpArchiver:
     def __init__(self, api_token: str):
