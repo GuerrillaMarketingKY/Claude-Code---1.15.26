@@ -61,7 +61,11 @@ class ClickUpArchiver:
             response = requests.get(
                 f'{BASE_URL}/list/{list_id}/task',
                 headers=self.headers,
-                params={'archived': 'false', 'include_closed': 'false'}
+                params={
+                    'archived': 'false',
+                    'include_closed': 'true',  # Include closed tasks
+                    'subtasks': 'true'
+                }
             )
             response.raise_for_status()
             return response.json().get('tasks', [])
@@ -119,83 +123,95 @@ class ClickUpArchiver:
         else:
             return None, False
 
-    def archive_old_tasks(self):
-        """Archive tasks older than threshold from all spaces"""
-        print(f"\n🗂️  Archiving tasks older than {ARCHIVE_AFTER_DAYS} days...")
-        print(f"Strategy: Create '{ARCHIVE_LIST_NAME}' in each space as needed")
-        print(f"Scanning all spaces in workspace...\n")
-
-        # Get all spaces
+    def get_all_tasks_across_workspace(self):
+        """Get ALL tasks from all spaces in workspace"""
+        all_tasks = []
         spaces = self.get_all_spaces()
-        total_archived = 0
-        total_skipped = 0
 
-        # Process each space separately
         for space in spaces:
             space_id = space['id']
             space_name = space['name']
+            print(f"  📁 Scanning space: {space_name}")
 
-            print(f"  📁 Space: {space_name}")
-
-            # Get all lists in this space
             lists = self.get_all_lists(space_id)
 
-            # Find old tasks in this space
-            old_tasks_in_space = []
-
             for lst in lists:
-                # Skip if this IS the archive list
+                # Skip archive lists
                 if ARCHIVE_LIST_NAME.lower() in lst['name'].lower():
                     continue
 
+                list_name = lst['name']
                 tasks = self.get_tasks_in_list(lst['id'])
 
                 for task in tasks:
-                    date_updated_str = task.get('date_updated')
-                    if not date_updated_str:
-                        continue
+                    task['_source_space'] = space_name
+                    task['_source_list'] = list_name
+                    all_tasks.append(task)
 
-                    last_updated = datetime.fromtimestamp(int(date_updated_str) / 1000)
-                    days_old = (datetime.now() - last_updated).days
+        return all_tasks
 
-                    if days_old >= ARCHIVE_AFTER_DAYS:
-                        old_tasks_in_space.append((task, days_old))
+    def archive_old_tasks(self):
+        """Archive tasks older than threshold - move all to Production archive"""
+        print(f"\n🗂️  Archiving tasks older than {ARCHIVE_AFTER_DAYS} days...")
+        print(f"Target: {ARCHIVE_LIST_NAME} (Production space)")
+        print(f"Scanning all spaces in workspace...\n")
 
-            # If we found old tasks in this space, find/create archive list and move them
-            if old_tasks_in_space:
-                print(f"     Found {len(old_tasks_in_space)} old tasks in this space")
+        # HARDCODED: Production space archive list ID (from user)
+        PRODUCTION_ARCHIVE_LIST_ID = "901324425454"
 
-                # Find or create archive list in THIS space
-                archive_list_id, was_created = self.find_or_create_archive_list(space_id, space_name)
+        # Get all tasks across all spaces
+        print("Fetching all tasks across workspace...\n")
+        all_tasks = self.get_all_tasks_across_workspace()
 
-                if not archive_list_id:
-                    print(f"     ❌ Could not find/create archive list in this space")
-                    total_skipped += len(old_tasks_in_space)
-                    continue
+        print(f"\n✓ Total tasks found: {len(all_tasks)}\n")
 
-                if not was_created:
-                    print(f"     ✓ Using existing '{ARCHIVE_LIST_NAME}' list")
+        # Find tasks older than 30 days
+        old_tasks = []
+        for task in all_tasks:
+            date_updated_str = task.get('date_updated')
+            if not date_updated_str:
+                continue
 
-                # Move tasks to archive within same space
-                for task, days_old in old_tasks_in_space:
-                    task_name = task['name']
-                    print(f"     📦 Archiving: {task_name} ({days_old}d old)")
+            last_updated = datetime.fromtimestamp(int(date_updated_str) / 1000)
+            days_old = (datetime.now() - last_updated).days
 
-                    if self.move_task_to_list(task['id'], archive_list_id, task_name):
-                        total_archived += 1
-                        print(f"        ✓ Moved to archive")
-                    else:
-                        total_skipped += 1
+            if days_old >= ARCHIVE_AFTER_DAYS:
+                old_tasks.append((task, days_old))
+
+        print(f"Found {len(old_tasks)} tasks older than {ARCHIVE_AFTER_DAYS} days\n")
+
+        if not old_tasks:
+            print("✓ No old tasks to archive!")
+            return
+
+        # Move all old tasks to Production archive
+        archived_count = 0
+        skipped_count = 0
+
+        print(f"Moving tasks to archive list (ID: {PRODUCTION_ARCHIVE_LIST_ID})...\n")
+
+        for task, days_old in old_tasks:
+            task_name = task['name']
+            task_id = task['id']
+            source_space = task.get('_source_space', 'Unknown')
+            source_list = task.get('_source_list', 'Unknown')
+
+            print(f"📦 {task_name}")
+            print(f"   From: {source_space} / {source_list} ({days_old}d old)")
+
+            if self.move_task_to_list(task_id, PRODUCTION_ARCHIVE_LIST_ID, task_name):
+                archived_count += 1
+                print(f"   ✓ Moved to archive")
             else:
-                print(f"     No old tasks found")
-
-            print()  # Blank line between spaces
+                skipped_count += 1
+                # Error already printed by move_task_to_list
+            print()  # Blank line
 
         print(f"{'='*60}")
         print(f"📊 Summary:")
-        print(f"   Archived: {total_archived} tasks")
-        if total_skipped > 0:
-            print(f"   Failed: {total_skipped} tasks")
+        print(f"   Archived: {archived_count} tasks")
+        if skipped_count > 0:
+            print(f"   Skipped/Failed: {skipped_count} tasks")
         print(f"{'='*60}")
 
 
