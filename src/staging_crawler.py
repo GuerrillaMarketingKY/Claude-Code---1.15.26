@@ -19,6 +19,7 @@ Examples:
   python src/staging_crawler.py https://staging.example.com
   python src/staging_crawler.py https://staging.example.com --max-pages 200
   python src/staging_crawler.py https://staging.example.com --timeout 15 --output report.json
+  python src/staging_crawler.py https://staging.example.com --wp-user admin --wp-pass secret
 """
 
 import argparse
@@ -81,7 +82,7 @@ class StagingCrawler:
     """Crawls a staging website and collects errors."""
 
     def __init__(self, base_url, max_pages=100, timeout=10, verify_ssl=True,
-                 check_external=False, user_agent=None):
+                 check_external=False, user_agent=None, no_proxy=False):
         parsed = urlparse(base_url)
         # Normalize: ensure scheme, strip trailing slash
         if not parsed.scheme:
@@ -97,17 +98,53 @@ class StagingCrawler:
 
         self.session = requests.Session()
         self.session.headers.update({
-            "User-Agent": user_agent or "StagingCrawler/1.0 (error-checker)"
+            "User-Agent": user_agent or (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            )
         })
-        # Don't follow redirects automatically so we can inspect chains
+        # Bypass proxy if requested (useful in restricted environments)
+        if no_proxy:
+            self.session.trust_env = False
         self.session.max_redirects = 10
 
         self.visited = set()
         self.queued = set()
+        self._checked_resources = set()
         self.errors: list[CrawlError] = []
         self.page_results: list[PageResult] = []
 
     # -- public API ----------------------------------------------------------
+
+    def wp_login(self, username, password):
+        """Authenticate with WordPress wp-login.php to get session cookies."""
+        login_url = self.base_url + "/wp-login.php"
+        print(f"  Logging in to WordPress at {login_url} ...")
+        try:
+            resp = self.session.post(login_url, data={
+                "log": username,
+                "pwd": password,
+                "wp-submit": "Log In",
+                "redirect_to": self.base_url + "/wp-admin/",
+                "testcookie": "1",
+            }, timeout=self.timeout, verify=self.verify_ssl, allow_redirects=True)
+
+            # Check for successful login: should redirect to wp-admin or return 200
+            if resp.status_code == 200 and "wp-admin" in resp.url:
+                print(f"  WordPress login successful (redirected to {resp.url})")
+                return True
+            if resp.status_code == 200 and "wp-login.php" in resp.url:
+                print(f"  WordPress login may have failed (still on login page)")
+                self._add_error(login_url, "auth_error",
+                                "WordPress login failed - check credentials")
+                return False
+            print(f"  WordPress login response: HTTP {resp.status_code} -> {resp.url}")
+            return resp.status_code < 400
+        except requests.exceptions.RequestException as exc:
+            print(f"  WordPress login failed: {exc}")
+            self._add_error(login_url, "auth_error", f"Login request failed: {exc}")
+            return False
 
     def crawl(self) -> CrawlReport:
         """Run the crawl and return a report."""
@@ -260,17 +297,9 @@ class StagingCrawler:
         # Skip data URIs
         if resource_url.startswith("data:"):
             return
-        # Skip already-checked URLs to avoid duplicate work
-        cache_key = resource_url
-        if cache_key in self.visited:
+        if resource_url in self.visited or resource_url in self._checked_resources:
             return
-        # Don't add to main visited set (we still want to crawl pages)
-        # but track checked resources separately
-        if not hasattr(self, "_checked_resources"):
-            self._checked_resources = set()
-        if cache_key in self._checked_resources:
-            return
-        self._checked_resources.add(cache_key)
+        self._checked_resources.add(resource_url)
 
         try:
             resp = self.session.head(resource_url, timeout=self.timeout,
@@ -420,6 +449,7 @@ Examples:
   %(prog)s https://staging.example.com --max-pages 200 --timeout 15
   %(prog)s https://staging.example.com --check-external --output report.json
   %(prog)s https://staging.example.com --no-verify-ssl
+  %(prog)s https://staging.example.com --wp-user admin --wp-pass secret
         """
     )
     parser.add_argument("url", help="The staging site URL to crawl")
@@ -435,12 +465,20 @@ Examples:
                         help="Save full JSON report to this file path")
     parser.add_argument("--user-agent", type=str, default=None,
                         help="Custom User-Agent string")
+    parser.add_argument("--no-proxy", action="store_true",
+                        help="Bypass system proxy settings")
+    parser.add_argument("--wp-user", type=str, default=None,
+                        help="WordPress username for authenticated crawling")
+    parser.add_argument("--wp-pass", type=str, default=None,
+                        help="WordPress password for authenticated crawling")
 
     args = parser.parse_args()
 
     print(f"\n  Starting crawl of: {args.url}")
     print(f"  Max pages: {args.max_pages} | Timeout: {args.timeout}s")
     print(f"  SSL verify: {not args.no_verify_ssl} | Check external: {args.check_external}")
+    if args.wp_user:
+        print(f"  WordPress auth: {args.wp_user}")
     print("-" * 70)
 
     crawler = StagingCrawler(
@@ -450,7 +488,13 @@ Examples:
         verify_ssl=not args.no_verify_ssl,
         check_external=args.check_external,
         user_agent=args.user_agent,
+        no_proxy=args.no_proxy,
     )
+
+    # WordPress authentication
+    if args.wp_user and args.wp_pass:
+        if not crawler.wp_login(args.wp_user, args.wp_pass):
+            print("  WARNING: WordPress login failed, continuing as unauthenticated")
 
     report = crawler.crawl()
     print_report(report)
