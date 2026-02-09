@@ -40,5 +40,8 @@ pip-log.txt
 pip-delete-this-directory.txt
 .env.python
 .env 
-__pycache__/ 
-*.pyc 
+__pycache__/
+*.pyc
+
+# Generated marketplace ads output
+marketplace_ads/output/
